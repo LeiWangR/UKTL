@@ -1,0 +1,18 @@
+{
+  "tensor_shape": [
+    6,
+    7,
+    8
+  ],
+  "num_classes": 4,
+  "rank": 3,
+  "pivots": 12,
+  "bandwidth": 1.0,
+  "mu": 0.5,
+  "learnable_mu": false,
+  "no_uncertainty": false,
+  "sigma_low": 0.25,
+  "sigma_high": 2.0,
+  "nystrom_method": "newton_schulz",
+  "nystrom_iterations": 25
+}

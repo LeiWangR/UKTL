@@ -1,0 +1,11 @@
+name: uktl
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy>=1.26
+  - pytest>=8.0
+  - pip
+  - pip:
+      - torch>=2.2
