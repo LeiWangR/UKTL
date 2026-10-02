@@ -205,6 +205,10 @@ k = sum_product_tensor_kernel(
 # k.shape == [len(a), len(b)]
 ```
 
+### MSN architecture 
+
+The repository provides a lightweight reference MSN implementation for uncertainty estimation. The MSN is intentionally modular: its architecture can be adapted to the tensor dimensions, representation, and computational requirements of a particular downstream task, while preserving the UKTL interface of estimating direction-wise uncertainty and using it to reweight the mode-wise subspaces.
+
 ### Uncertainty network
 
 ```python
