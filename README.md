@@ -102,42 +102,94 @@ logits = classifier(features)
 For segmentation, detection, retrieval, metric learning, regression, or other structured tasks, use the UKTL feature map wherever a tensor-level embedding is appropriate and keep the downstream objective/task architecture separate.
 
 
-## Toy effectiveness experiment
+## Controlled KTL vs UKTL experiment
 
-`examples/toy_experiments.py` provides a controlled comparison between **KTL** (the same model with uncertainty disabled) and **UKTL**. The synthetic tensors are generated so that classes share the same tensor size while their discriminative information is encoded in mode-wise low-rank subspaces. A second setting makes one tensor mode a class-independent nuisance mode, which is designed to test the purpose of uncertainty weighting.
-
-The script uses a train/validation/test split for every seed: pivots are initialized from training data only, checkpoints are selected using validation accuracy only, and the test set is evaluated once after selection. It reports mean ± standard deviation across multiple seeds and the learned mean sigma per mode. These are illustrative sanity experiments.
-
-Run:
+The `examples/` folder includes a controlled synthetic benchmark comparing
+**KTL** (the same model with uncertainty disabled) and **UKTL**. The benchmark
+is designed to test the setting motivating UKTL: different tensor modes can
+have different reliability.
 
 ```bash
 python -m examples.toy_experiments
 ```
 
-A representative run with the included seeds currently gives:
+The experiment uses 4- and 10-class synthetic tensor classification under two
+conditions:
 
-```text
-Clean subspace task
-KTL          test = 96.04 ± 3.40%
-             val  = 98.96 ± 1.47%
-UKTL         test = 95.00 ± 1.84%
-             val  = 98.96 ± 1.47%
-             mean sigma = 1.170, 1.193, 1.215
+1. **Clean subspace task:** all three modes contain class-specific low-rank
+   structure and no nuisance component is added. This provides a control
+   setting in which all modes are informative.
+2. **Nuisance-mode task:** exactly 50% of samples receive a strong,
+   sample-dependent higher-rank component varying across mode 3, while modes 1
+   and 2 retain the class-related factors. This creates the unequal-mode-
+   reliability setting that is the main motivation for the uncertainty
+   mechanism.
 
-Nuisance-mode task
-KTL          test = 96.46 ± 0.59%
-             val  = 96.88 ± 2.55%
-UKTL         test = 95.00 ± 3.10%
-             val  = 98.96 ± 1.47%
-             mean sigma = 1.047, 1.059, 1.228
-Higher sigma in the nuisance mode is an intended qualitative diagnostic, not a target value.
-```
+### Experimental protocol
 
-**Controlled toy experiments.** These experiments are designed to probe the behavior of the UKTL components rather than to reproduce the benchmark results in the paper. The clean-subspace task verifies that the subspace kernel can already provide strong discrimination when all modes are informative. The nuisance-mode task introduces a deliberately class-independent, randomly varying third mode and examines whether MSN assigns higher uncertainty to that mode. A higher uncertainty score serves as a qualitative diagnostic of mode-aware weighting and does not imply that UKTL must achieve higher classification accuracy on every synthetic task.
+Each run contains 400 samples with a class-balanced 50% / 20% / 30%
+train/validation/test split (200 / 80 / 120 samples).
 
-**Interpretation.** In the clean setting, the three mean uncertainty values are relatively close (1.170, 1.193, and 1.215), and KTL slightly outperforms UKTL in this particular three-seed run (96.04% vs. 95.00% test accuracy). This is consistent with the setting in which all modes are informative, where additional uncertainty weighting is not necessarily beneficial. In the nuisance-mode setting, MSN assigns the largest mean uncertainty to the deliberately class-independent mode 3 (1.228), compared with 1.047 and 1.059 for modes 1 and 2. This indicates that MSN can differentiate the relative reliability of tensor modes in this controlled setting. The lower UKTL accuracy in this toy experiment does not contradict this diagnostic: uncertainty estimation and downstream classification performance are related but distinct objectives.
+For the nuisance task, clean and corrupted samples are split separately within
+each class, so each of train, validation, and test contains exactly 50% nuisance
+samples. KTL and UKTL use the same tensor shape, subspace rank, Nyström pivots,
+kernel bandwidth, mixture weight, optimizer, learning rate, weight decay,
+gradient clipping, random seeds, and 40 training epochs. Nyström pivots are
+initialized from the training split only; validation accuracy is used only for
+checkpoint selection; the held-out test set is evaluated after model selection.
 
-**Summary.** KTL provides the structured subspace kernel, while UKTL augments it with adaptive uncertainty estimation. These toy experiments illustrate the two mechanisms separately; the benchmark experiments in the paper evaluate their effect on real recognition tasks.
+### Current results
+
+Results are mean +/- population standard deviation over seeds 0, 1, and 2.
+
+| Task | Classes | Method | Val | Overall test | Clean-subset test | Nuisance-subset test |
+|---|---:|---|---:|---:|---:|---:|
+| Clean subspace | 4 | KTL | 97.08 +/- 2.57% | 97.22 +/- 1.42% | 97.22 +/- 1.42% | -- |
+| Clean subspace | 4 | UKTL | 99.58 +/- 0.59% | 99.17 +/- 0.00% | 99.17 +/- 0.00% | -- |
+| Nuisance mode | 4 | KTL | 90.42 +/- 13.55% | 87.22 +/- 16.31% | 85.00 +/- 17.69% | 89.44 +/- 14.93% |
+| Nuisance mode | 4 | UKTL | 95.42 +/- 6.48% | 95.83 +/- 3.54% | 95.56 +/- 2.83% | 96.11 +/- 4.37% |
+| Clean subspace | 10 | KTL | 73.33 +/- 16.53% | 70.56 +/- 16.31% | 70.56 +/- 16.31% | -- |
+| Clean subspace | 10 | UKTL | 88.33 +/- 8.25% | 85.56 +/- 8.17% | 85.56 +/- 8.17% | -- |
+| Nuisance mode | 10 | KTL | 55.83 +/- 11.47% | 54.17 +/- 11.24% | 57.22 +/- 13.63% | 51.11 +/- 10.03% |
+| Nuisance mode | 10 | UKTL | 71.67 +/- 16.40% | 71.67 +/- 16.72% | 71.67 +/- 18.00% | 71.67 +/- 15.46% |
+
+For the clean task, `Overall test` and `Clean-subset test` are identical because
+the test set contains no nuisance samples. For the nuisance task, `Overall
+test` is computed over the complete held-out test set, while the two subset
+columns isolate the clean and nuisance samples within that same held-out test
+set.
+
+The corresponding overall test differences (UKTL minus KTL) are +1.94 points
+for 4 classes in the clean task, +8.61 points for 4 classes in the nuisance
+task, +15.00 points for 10 classes in the clean task, and +17.50 points for
+10 classes in the nuisance task. On the nuisance subset, the UKTL gains are
++6.67 points for 4 classes and +20.56 points for 10 classes.
+
+### Uncertainty diagnostic
+
+UKTL's mean sigma values are:
+
+- 4-class clean: mode 1 = 1.292, mode 2 = 1.292, mode 3 = 1.297.
+- 4-class nuisance: mode 1 = 1.176, mode 2 = 1.176, mode 3 = 1.229.
+- 10-class clean: mode 1 = 1.333, mode 2 = 1.404, mode 3 = 1.341.
+- 10-class nuisance: mode 1 = 1.238, mode 2 = 1.265, mode 3 = 1.343.
+
+In both nuisance-mode experiments, mode 3 has the largest mean sigma, consistent
+with the deliberately reduced reliability of that mode. The clean experiments
+are a control and do not require the uncertainty scores to favor any particular
+mode.
+
+### Interpretation and scope
+
+The nuisance-mode condition is the more direct effectiveness test because it
+deliberately creates unequal mode reliability and measures performance on the
+corresponding nuisance subset.
+
+The clean-task gains should not be attributed solely to uncertainty: UKTL
+contains additional learned MSN parameters. A capacity-matched ablation would
+be needed to isolate the contribution of uncertainty weighting from the extra
+model capacity. The results therefore demonstrate effectiveness in this
+controlled stress setting, not universal superiority over KTL.
 
 ## Using your own dataset
 

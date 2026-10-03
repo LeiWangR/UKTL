@@ -1,9 +1,7 @@
-"""Controlled toy experiments comparing KTL and UKTL.
+"""Controlled KTL vs UKTL experiments on clean and nuisance-mode tasks.
 
-The experiments are small and task-agnostic. They demonstrate the
-intended behavior of UKTL on tensors whose class information is encoded in
-mode-wise subspaces, with an additional nuisance-mode setting where one mode is
-class-independent and varies strongly from sample to sample.
+Run from the repository root:
+    python examples/toy_experiments.py
 """
 from __future__ import annotations
 
@@ -12,90 +10,72 @@ from statistics import mean, pstdev
 from typing import Dict, List, Tuple
 
 import torch
+import torch.nn.functional as F
 
 from uktl import UKTLClassifier, UKTLFeatureExtractor
+from examples.mode_noise_data import RANK, SHAPE, make_dataset, split_dataset
 
-
-NUM_CLASSES = 4
-SHAPE = (5, 6, 7)
-RANK = 2
-PIVOTS = 10
-EPOCHS = 35
+CLASS_COUNTS = (4, 10)
 SEEDS = (0, 1, 2)
+PIVOTS = 16
+EPOCHS = 40
+BANDWIDTH = 1.0
+MU = 0.05
+BETA = 0.01
+SIGMA_LOW = 0.25
+SIGMA_HIGH = 2.0
+LEARNING_RATE = 3e-3
+WEIGHT_DECAY = 1e-4
+GRAD_CLIP = 5.0
 
 
 @dataclass
 class Result:
     val_accuracy: float
     test_accuracy: float
+    clean_test_accuracy: float
+    nuisance_test_accuracy: float
     sigma_means: List[float]
 
 
-def orthonormal(rows: int, rank: int, generator: torch.Generator) -> torch.Tensor:
-    q, _ = torch.linalg.qr(torch.randn(rows, rank, generator=generator), mode="reduced")
-    return q[:, :rank]
-
-
-def make_dataset(seed: int, nuisance_mode: bool) -> Tuple[torch.Tensor, ...]:
-    generator = torch.Generator().manual_seed(seed)
-    class_bases = [
-        [orthonormal(d, RANK, generator) for d in SHAPE]
-        for _ in range(NUM_CLASSES)
-    ]
-
-    def build(num_samples: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        xs: List[torch.Tensor] = []
-        ys: List[int] = []
-        for i in range(num_samples):
-            label = i % NUM_CLASSES
-            factors = class_bases[label]
-            core = 0.8 * torch.randn(RANK, RANK, RANK, generator=generator)
-            # In the nuisance setting, mode 3 is random and contains no class
-            # information; modes 1 and 2 retain the discriminative subspaces.
-            mode3 = orthonormal(SHAPE[2], RANK, generator) if nuisance_mode else factors[2]
-            sample = torch.einsum(
-                "abc,ia,jb,kc->ijk", core, factors[0], factors[1], mode3
-            )
-            sample = sample + 0.08 * torch.randn(*SHAPE, generator=generator)
-            xs.append(sample)
-            ys.append(label)
-        return torch.stack(xs), torch.tensor(ys, dtype=torch.long)
-
-    train_x, train_y = build(160)
-    test_x, test_y = build(160)
-    return train_x, train_y, test_x, test_y
-
-
-def split_train_validation(
-    x: torch.Tensor, y: torch.Tensor, seed: int
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    generator = torch.Generator().manual_seed(1000 + seed)
-    perm = torch.randperm(len(x), generator=generator)
-    val_idx = perm[:32]
-    train_idx = perm[32:]
-    return x[train_idx], y[train_idx], x[val_idx], y[val_idx]
-
-
-def run_once(seed: int, nuisance_mode: bool, uncertainty: bool) -> Result:
+def build_model(seed: int, num_classes: int, uncertainty: bool) -> UKTLClassifier:
+    """Build KTL/UKTL with identical non-MSN settings and seed-controlled init."""
     torch.manual_seed(seed)
-    train_x, train_y, test_x, test_y = make_dataset(seed, nuisance_mode)
-    train_x, train_y, val_x, val_y = split_train_validation(train_x, train_y, seed)
-
     features = UKTLFeatureExtractor(
         tensor_shape=SHAPE,
         subspace_rank=RANK,
         num_pivots=PIVOTS,
-        bandwidth=1.0,
-        mu_init=0.5,
+        bandwidth=BANDWIDTH,
+        mu_init=MU,
         learnable_mu=False,
         uncertainty=uncertainty,
-        sigma_low=0.25,
-        sigma_high=2.0,
+        sigma_low=SIGMA_LOW,
+        sigma_high=SIGMA_HIGH,
         nystrom_inverse_sqrt_method="newton_schulz",
+        nystrom_inverse_sqrt_iterations=25,
     )
-    model = UKTLClassifier(features, NUM_CLASSES)
-    features.initialize_pivots(train_x, soft_kmeans_iters=10, seed=seed)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3, weight_decay=1e-4)
+    torch.manual_seed(seed + 10000)
+    return UKTLClassifier(features, num_classes)
+
+
+def train_once(seed: int, num_classes: int, nuisance_mode: bool, uncertainty: bool) -> Result:
+    torch.manual_seed(seed)
+    x, y, corrupted = make_dataset(seed, num_classes, nuisance_mode)
+
+    (
+        train_x, train_y, _train_corrupted,
+        val_x, val_y, _val_corrupted,
+        test_x, test_y, test_corrupted,
+    ) = split_dataset(x, y, corrupted, num_classes, seed)
+
+    model = build_model(seed, num_classes, uncertainty)
+    # Pivots are initialized only from the training split.
+    model.features.initialize_pivots(train_x, soft_kmeans_iters=15, seed=seed)
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY
+    )
+
     best_val = -1.0
     best_state = None
 
@@ -103,60 +83,115 @@ def run_once(seed: int, nuisance_mode: bool, uncertainty: bool) -> Result:
         model.train()
         optimizer.zero_grad(set_to_none=True)
         logits, stats = model(train_x, return_stats=True)
-        loss = torch.nn.functional.cross_entropy(logits, train_y)
+        loss = F.cross_entropy(logits, train_y)
+
         if uncertainty:
-            loss = loss + 0.01 * stats["sigma_regularizer"] / train_y.numel()
+            # Full-batch optimization makes the normalization use all training
+            # samples, rather than a changing minibatch subset.
+            loss = loss + BETA * stats["sigma_regularizer"] / train_y.numel()
+
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
         optimizer.step()
 
         model.eval()
         with torch.no_grad():
-            val_acc = float((model(val_x).argmax(1) == val_y).float().mean())
+            val_logits = model(val_x)
+            val_acc = float((val_logits.argmax(dim=1) == val_y).float().mean())
+
         if val_acc > best_val:
             best_val = val_acc
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
-    assert best_state is not None
+    if best_state is None:
+        raise RuntimeError("No best validation state was recorded.")
+
     model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
-        test_acc = float((model(test_x).argmax(1) == test_y).float().mean())
-        stats = model(test_x, return_stats=True)[1]
-        sigmas = [float(s.mean()) for s in stats["input_sigmas"]]
-    return Result(best_val, test_acc, sigmas)
+        test_logits, stats = model(test_x, return_stats=True)
+        preds = test_logits.argmax(dim=1)
+        test_acc = float((preds == test_y).float().mean())
+
+        clean_mask = ~test_corrupted
+        nuisance_mask = test_corrupted
+        clean_acc = float((preds[clean_mask] == test_y[clean_mask]).float().mean())
+        nuisance_acc = float(
+            (preds[nuisance_mask] == test_y[nuisance_mask]).float().mean()
+        ) if nuisance_mode else float("nan")
+
+        sigma_means = [float(s.mean()) for s in stats["input_sigmas"]]
+
+    return Result(best_val, test_acc, clean_acc, nuisance_acc, sigma_means)
 
 
-def summarize(results: Dict[str, List[Result]]) -> None:
-    for label, values in results.items():
-        test_scores = [r.test_accuracy for r in values]
-        print(
-            f"{label:<12} test = {100 * mean(test_scores):5.2f} ± "
-            f"{100 * pstdev(test_scores):4.2f}%"
-        )
-        val_scores = [r.val_accuracy for r in values]
-        print(
-            f"{'':<12} val  = {100 * mean(val_scores):5.2f} ± "
-            f"{100 * pstdev(val_scores):4.2f}%"
-        )
-        if values[0].sigma_means:
-            mode_means = [mean(r.sigma_means[m] for r in values) for m in range(len(values[0].sigma_means))]
-            print(f"{'':<12} mean sigma = " + ", ".join(f"{v:.3f}" for v in mode_means))
+def mean_std(values: List[float]) -> Tuple[float, float]:
+    return mean(values), pstdev(values)
+
+
+def summarize(task_name: str, num_classes: int, results: Dict[str, List[Result]]) -> None:
+    print("\n" + "=" * 78)
+    print(f"{task_name} | {num_classes} classes")
+    print("=" * 78)
+
+    for method, values in results.items():
+        vm, vs = mean_std([r.val_accuracy for r in values])
+        tm, ts = mean_std([r.test_accuracy for r in values])
+        cm, cs = mean_std([r.clean_test_accuracy for r in values])
+
+        print(f"\n{method}")
+        print(f"  Val               : {100*vm:6.2f} ± {100*vs:5.2f}%")
+        print(f"  Overall test      : {100*tm:6.2f} ± {100*ts:5.2f}%")
+        print(f"  Clean-subset test : {100*cm:6.2f} ± {100*cs:5.2f}%")
+
+        nuisance_values = [r.nuisance_test_accuracy for r in values]
+        if all(torch.isfinite(torch.tensor(v)) for v in nuisance_values):
+            nm, ns = mean_std(nuisance_values)
+            print(
+                f"  Nuisance-subset test: "
+                f"{100*nm:6.2f} ± {100*ns:5.2f}%"
+            )
+
+        if method == "UKTL":
+            mode_sigmas = [
+                mean(r.sigma_means[m] for r in values)
+                for m in range(len(values[0].sigma_means))
+            ]
+            print("  Mean sigma   : " + ", ".join(
+                f"mode {m+1}={s:.3f}" for m, s in enumerate(mode_sigmas)
+            ))
+
+
+def run_task(num_classes: int, nuisance_mode: bool) -> Dict[str, List[Result]]:
+    return {
+        "KTL": [
+            train_once(seed, num_classes, nuisance_mode, uncertainty=False)
+            for seed in SEEDS
+        ],
+        "UKTL": [
+            train_once(seed, num_classes, nuisance_mode, uncertainty=True)
+            for seed in SEEDS
+        ],
+    }
 
 
 def main() -> None:
-    for nuisance_mode, title in [
-        (False, "Clean subspace task"),
-        (True, "Nuisance-mode task"),
-    ]:
-        print(f"\n{title}")
-        results = {
-            "KTL": [run_once(seed, nuisance_mode, uncertainty=False) for seed in SEEDS],
-            "UKTL": [run_once(seed, nuisance_mode, uncertainty=True) for seed in SEEDS],
-        }
-        summarize(results)
-        if nuisance_mode:
-            print("Higher sigma in the nuisance mode is an intended qualitative diagnostic, not a target value.")
+    for num_classes in CLASS_COUNTS:
+        for nuisance_mode, task_name in (
+            (False, "Clean subspace task"),
+            (True, "Nuisance-mode task"),
+        ):
+            results = run_task(num_classes, nuisance_mode)
+            summarize(task_name, num_classes, results)
+
+            ktl_test = mean(r.test_accuracy for r in results["KTL"])
+            uktl_test = mean(r.test_accuracy for r in results["UKTL"])
+            print(f"\n  UKTL - KTL test difference: {100*(uktl_test-ktl_test):+.2f} points")
+
+            if nuisance_mode:
+                ktl_n = mean(r.nuisance_test_accuracy for r in results["KTL"])
+                uktl_n = mean(r.nuisance_test_accuracy for r in results["UKTL"])
+                print(f"  UKTL - KTL nuisance difference: {100*(uktl_n-ktl_n):+.2f} points")
 
 
 if __name__ == "__main__":
