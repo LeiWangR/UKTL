@@ -139,18 +139,18 @@ checkpoint selection; the held-out test set is evaluated after model selection.
 
 ### Current results
 
-Results are mean +/- population standard deviation over seeds 0, 1, and 2.
+Results are mean ± population standard deviation over seeds 0, 1, and 2.
 
 | Task | Classes | Method | Val | Overall test | Clean-subset test | Nuisance-subset test |
 |---|---:|---|---:|---:|---:|---:|
-| Clean subspace | 4 | KTL | 97.08 +/- 2.57% | 97.22 +/- 1.42% | 97.22 +/- 1.42% | -- |
-| Clean subspace | 4 | UKTL | 99.58 +/- 0.59% | 99.17 +/- 0.00% | 99.17 +/- 0.00% | -- |
-| Nuisance mode | 4 | KTL | 90.42 +/- 13.55% | 87.22 +/- 16.31% | 85.00 +/- 17.69% | 89.44 +/- 14.93% |
-| Nuisance mode | 4 | UKTL | 95.42 +/- 6.48% | 95.83 +/- 3.54% | 95.56 +/- 2.83% | 96.11 +/- 4.37% |
-| Clean subspace | 10 | KTL | 73.33 +/- 16.53% | 70.56 +/- 16.31% | 70.56 +/- 16.31% | -- |
-| Clean subspace | 10 | UKTL | 88.33 +/- 8.25% | 85.56 +/- 8.17% | 85.56 +/- 8.17% | -- |
-| Nuisance mode | 10 | KTL | 55.83 +/- 11.47% | 54.17 +/- 11.24% | 57.22 +/- 13.63% | 51.11 +/- 10.03% |
-| Nuisance mode | 10 | UKTL | 71.67 +/- 16.40% | 71.67 +/- 16.72% | 71.67 +/- 18.00% | 71.67 +/- 15.46% |
+| Clean subspace | 4 | KTL | 97.08 ± 2.57 | 97.22 ± 1.42 | 97.22 ± 1.42 | -- |
+| Clean subspace | 4 | UKTL | 99.58 ± 0.59 | 99.17 ± 0.00 | 99.17 ± 0.00 | -- |
+| Nuisance mode | 4 | KTL | 90.42 ± 13.55 | 87.22 ± 16.31 | 85.00 ± 17.69 | 89.44 ± 14.93 |
+| Nuisance mode | 4 | UKTL | 95.42 ± 6.48 | 95.83 ± 3.54 | 95.56 ± 2.83 | 96.11 ± 4.37 |
+| Clean subspace | 10 | KTL | 73.33 ± 16.53 | 70.56 ± 16.31 | 70.56 ± 16.31 | -- |
+| Clean subspace | 10 | UKTL | 88.33 ± 8.25 | 85.56 ± 8.17 | 85.56 ± 8.17 | -- |
+| Nuisance mode | 10 | KTL | 55.83 ± 11.47 | 54.17 ± 11.24 | 57.22 ± 13.63 | 51.11 ± 10.03 |
+| Nuisance mode | 10 | UKTL | 71.67 ± 16.40 | 71.67 ± 16.72 | 71.67 ± 18.00 | 71.67 ± 15.46 |
 
 For the clean task, `Overall test` and `Clean-subset test` are identical because
 the test set contains no nuisance samples. For the nuisance task, `Overall
