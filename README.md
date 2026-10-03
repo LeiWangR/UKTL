@@ -9,7 +9,6 @@ Recommended: Python 3.10+ and a recent PyTorch release.
 ```bash
 python -m venv .venv
 source .venv/bin/activate          # Linux/macOS
-# .venv\\Scripts\\activate       # Windows PowerShell
 
 python -m pip install --upgrade pip
 pip install -r requirements.txt
